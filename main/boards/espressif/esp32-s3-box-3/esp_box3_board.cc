@@ -12,8 +12,19 @@
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
+#include <driver/gpio.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define TAG "EspBox3Board"
+
+// ---- BOX-3-SENSOR radar greeting (Ziyuan) ----
+// The radar module on the BOX-3-SENSOR dock drives GPIO21 high when it sees movement.
+#define RADAR_OUT_GPIO        GPIO_NUM_21
+#define GREETING_WAKE_WORD    "你好紫苑"
+#define RADAR_ABSENT_MS       (3LL * 60 * 1000)    // must have been away at least 3 minutes
+#define GREETING_COOLDOWN_MS  (30LL * 60 * 1000)   // greet at most once every 30 minutes
 
 // Init ili9341 by custom cmd
 static const ili9341_lcd_init_cmd_t vendor_specific_init[] = {
@@ -136,12 +147,66 @@ private:
 #endif
     }
 
+    static void RadarTask(void* arg) {
+        gpio_config_t io_conf = {};
+        io_conf.pin_bit_mask = 1ULL << RADAR_OUT_GPIO;
+        io_conf.mode = GPIO_MODE_INPUT;
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.intr_type = GPIO_INTR_DISABLE;
+        gpio_config(&io_conf);
+
+        int64_t last_present_ms = esp_timer_get_time() / 1000;  // treat boot as "already here"
+        int64_t last_greet_ms = -GREETING_COOLDOWN_MS;
+        bool present = false;
+        int high_count = 0;
+        int low_count = 0;
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            int64_t now_ms = esp_timer_get_time() / 1000;
+            if (gpio_get_level(RADAR_OUT_GPIO) == 1) {
+                high_count++;
+                low_count = 0;
+            } else {
+                low_count++;
+                high_count = 0;
+            }
+            if (!present && high_count >= 3) {  // about 0.6 s of continuous detection
+                present = true;
+                ESP_LOGI(TAG, "Radar: presence started");
+                bool away_long_enough = (now_ms - last_present_ms) >= RADAR_ABSENT_MS;
+                bool cooled_down = (now_ms - last_greet_ms) >= GREETING_COOLDOWN_MS;
+                if (away_long_enough && cooled_down) {
+                    last_greet_ms = now_ms;
+                    Application::GetInstance().Schedule([]() {
+                        auto& app = Application::GetInstance();
+                        if (app.GetDeviceState() == kDeviceStateIdle) {
+                            app.WakeWordInvoke(GREETING_WAKE_WORD);
+                        }
+                    });
+                }
+            }
+            if (present) {
+                last_present_ms = now_ms;  // keep refreshing while someone is detected
+                if (low_count >= 5) {  // 1 s without detection
+                    present = false;
+                    ESP_LOGI(TAG, "Radar: presence ended");
+                }
+            }
+        }
+    }
+
+    void InitializeRadar() {
+        xTaskCreate(RadarTask, "radar_greet", 4096, nullptr, 3, nullptr);
+    }
+
 public:
     EspBox3Board() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
         InitializeSpi();
         InitializeIli9341Display();
         InitializeButtons();
+        InitializeRadar();
         GetBacklight()->RestoreBrightness();
     }
 
