@@ -133,3 +133,6 @@ idf.py flash
 
 ### 3. 如何恢复出厂设置？
 长按 Boot 按键 3 秒以上，设备会清除所有配置并重启。
+
+
+> Ziyuan build: radar presence greeting enabled for BOX-3-SENSOR (GPIO21).
