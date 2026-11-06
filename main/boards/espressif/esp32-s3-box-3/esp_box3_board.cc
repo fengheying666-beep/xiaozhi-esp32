@@ -7,6 +7,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "box3_sensor_dock.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -206,7 +207,8 @@ public:
         InitializeSpi();
         InitializeIli9341Display();
         InitializeButtons();
-        InitializeRadar();
+        // Radar greeting disabled: it fired too often.
+        sensor_dock::RegisterTools();
         GetBacklight()->RestoreBrightness();
     }
 
